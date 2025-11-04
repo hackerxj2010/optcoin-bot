@@ -172,29 +172,46 @@ class OptcoinWorkflow:
         if dry_run:
             return {"step": "login", "success": True, "simulated": True}
 
-        try:
-            if self.storage_state_path and Path(self.storage_state_path).exists():
-                self.logger.info("Session existante trouvée. Validation.")
-                await page.goto(f"{app_config.optcoin_base_url}#/delivery", timeout=app_config.default_timeout)
-                if "/login" not in page.url.lower():
-                    self.logger.info("Session valide.")
-                    return {"step": "login", "success": True, "cached": True}
-                self.logger.warning("Session expirée. Reconnexion.")
+        # Prioritize using the session file to bypass CAPTCHA
+        if self.storage_state_path and Path(self.storage_state_path).exists():
+            self.logger.info("Session existante trouvée. Validation.")
+            await page.goto(f"{app_config.optcoin_base_url}#/delivery", timeout=app_config.default_timeout)
+            if "/login" not in page.url.lower():
+                self.logger.info("Session valide. Connexion via la session réussie.")
+                return {"step": "login", "success": True, "cached": True}
+            self.logger.warning("Session expirée ou invalide. Tentative de reconnexion manuelle.")
 
+        # If no valid session, guide user toward manual login to solve CAPTCHA
+        self.logger.warning(
+            "Aucun fichier de session valide trouvé. Le bot va tenter de se connecter, "
+            "mais il est probable qu'un CAPTCHA bloque le processus."
+        )
+        self.logger.warning(
+            "Pour de meilleurs résultats, veuillez exécuter le bot en mode visible (`--mode visible`), "
+            "résoudre le CAPTCHA manuellement une fois pour créer le fichier de session, "
+            "puis exécuter en mode invisible pour les fois suivantes."
+        )
+
+        try:
             await page.goto(app_config.optcoin_login_url, timeout=app_config.default_timeout)
             await page.locator(app_config.selector_login_username_input).fill(self.username)
             await page.locator(app_config.selector_login_password_input).fill(self.password.get_secret_value())
-            await page.locator(app_config.selector_login_submit_button).click()
-            await page.wait_for_url(lambda url: "/login" not in url.lower(), timeout=app_config.default_timeout)
+
+            # Wait for user to solve CAPTCHA if in visible mode
+            self.logger.info("En attente de la résolution manuelle du CAPTCHA et de la redirection...")
+            await page.wait_for_url(lambda url: "/login" not in url.lower(), timeout=120000) # 2 minutes timeout for manual solving
 
             if self.browser_context and self.storage_state_path:
                 await self.browser_context.storage_state(path=self.storage_state_path)
-                self.logger.info(f"État de la session sauvegardé : {self.storage_state_path}")
+                self.logger.info(f"Nouvel état de session sauvegardé : {self.storage_state_path}")
 
             self.logger.info("Connexion réussie.")
             return {"step": "login", "success": True}
         except Exception as e:
-            error_msg = f"Échec de la connexion : {e}"
+            error_msg = (
+                f"La connexion a échoué, probablement à cause d'un CAPTCHA non résolu. "
+                f"Veuillez réessayer en mode visible pour vous connecter manuellement. Erreur originale : {e}"
+            )
             self.logger.error(error_msg)
             return {"step": "login", "success": False, "error": error_msg}
 
@@ -248,6 +265,7 @@ class OptcoinWorkflow:
         if dry_run:
             return {"step": "confirm_order", "success": True, "simulated": True}
         try:
+            await page.locator(app_config.selector_delivery_confirm_button).wait_for(state="visible", timeout=app_config.default_timeout)
             await page.locator(app_config.selector_delivery_confirm_button).click()
 
             confirm_alert = await self._capture_alert_message(page)
