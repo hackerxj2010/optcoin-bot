@@ -25,7 +25,7 @@ class AppConfig(BaseSettings):
     optcoin_password: Optional[SecretStr] = Field(default=None)
 
     default_timeout: int = Field(default=30000)  # Réduit pour une exécution plus rapide
-    confirm_live_trades: bool = Field(default=True)  # Activé pour la sécurité
+    confirm_live_trades: bool = Field(default=False)  # Désactivé pour rapidité
     save_debug_html: bool = Field(default=True)  # Activé pour un débogage plus facile
     enforce_min_run_per_execution: bool = Field(default=False)
     enforce_min_run_per_account: bool = Field(default=False)
@@ -65,7 +65,7 @@ class AppConfig(BaseSettings):
         default='input[placeholder="Please enter your email"]',
     )
     selector_login_password_input: str = Field(
-        default='input[placeholder="Please enter password"]',
+        default='input[type="password"]',
     )
     selector_login_submit_button: str = Field(
         default='button:has-text("LOG IN")',
