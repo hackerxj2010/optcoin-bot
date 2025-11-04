@@ -1,15 +1,14 @@
 import asyncio
-import logging
-import os
 from typing import List, Dict, Callable, Coroutine, Any
 
 from playwright.async_api import Browser
 
 from optcoin_bot.config import app_config, AccountCredentials, PROJECT_ROOT
 from optcoin_bot.playwright_adapter import PlaywrightAdapter
+from optcoin_bot.utils.logging import get_logger
 
+logger = get_logger("Orchestrator")
 
-logger = logging.getLogger(__name__)
 
 async def orchestrate_accounts(
     accounts: List[AccountCredentials],
@@ -20,14 +19,14 @@ async def orchestrate_accounts(
     **kwargs
 ) -> List[Dict]:
     limit = max(1, min(int(max_concurrency or 1), 10))
-    logger.info(f"Starting orchestration for {len(accounts)} accounts with concurrency limit {limit}.")
+    logger.info(f"Démarrage de l'orchestration pour {len(accounts)} comptes avec une limite de concurrence de {limit}.")
 
     semaphore = asyncio.Semaphore(limit)
     tasks = []
 
     async def worker(account: AccountCredentials):
         async with semaphore:
-            logger.debug(f"Processing account: {account.account_name}")
+            logger.debug(f"Traitement du compte : {account.account_name}")
             context = None
             try:
                 storage_state_path = None
@@ -43,7 +42,7 @@ async def orchestrate_accounts(
                     storage_state_path=storage_state_path,
                 )
                 result = await run_for_account(account, browser, adapter, context, **kwargs)
-                logger.debug(f"Finished processing account: {account.account_name}")
+                logger.debug(f"Fin du traitement du compte : {account.account_name}")
                 return result
             finally:
                 if context:
@@ -54,5 +53,5 @@ async def orchestrate_accounts(
         tasks.append(task)
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
-    logger.info(f"Orchestration completed for {len(accounts)} accounts.")
+    logger.info(f"Orchestration terminée pour {len(accounts)} comptes.")
     return results
