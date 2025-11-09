@@ -24,20 +24,17 @@ class AppConfig(BaseSettings):
     optcoin_username: Optional[str] = Field(default=None)
     optcoin_password: Optional[SecretStr] = Field(default=None)
 
-    default_timeout: int = Field(default=60000)  # Augmenté pour éviter les timeouts
+    default_timeout: int = Field(default=30000)  # Réduit pour une exécution plus rapide
     confirm_live_trades: bool = Field(default=False)  # Désactivé pour rapidité
-    save_debug_html: bool = Field(default=False)
+    save_debug_html: bool = Field(default=True)  # Activé pour un débogage plus facile
     enforce_min_run_per_execution: bool = Field(default=False)
     enforce_min_run_per_account: bool = Field(default=False)
     min_run_seconds: int = Field(default=0)
-    low_resource_mode: bool = Field(default=False)  # Désactivé pour meilleures performances
+    low_resource_mode: bool = Field(default=True)  # Activé pour optimiser les performances
     chromium_launch_args: list[str] = Field(
         default_factory=lambda: [
             "--disable-dev-shm-usage",
             "--disable-gpu",
-            "--disable-background-networking",
-            "--disable-background-timer-throttling",
-            "--disable-renderer-backgrounding",
             "--no-default-browser-check",
             "--no-first-run",
             "--no-zygote",
@@ -46,52 +43,46 @@ class AppConfig(BaseSettings):
             "--blink-settings=imagesEnabled=false",
         ]
     )
-    storage_state_enabled: bool = Field(default=False)
+    storage_state_enabled: bool = Field(default=True)  # Activé pour la mise en cache de session
     storage_state_dir: str = Field(default="storage_states")
     max_concurrent_accounts: int = Field(
-        default=1,  # Gardons 1 pour éviter toute concurrence
+        default=2,  # Augmenté pour un meilleur parallélisme
         description="Maximum number of accounts to process concurrently"
     )
 
     # -- Telegram / Webhook configuration --
-    # Required Telegram bot credentials
     telegram_api_id: int = Field(env="TELEGRAM_API_ID")
     telegram_api_hash: str = Field(env="TELEGRAM_API_HASH")
     telegram_bot_token: SecretStr = Field(env="TELEGRAM_BOT_TOKEN")
-    telegram_mode: str = Field(default="headless")  # Always use headless mode for Telegram bot runs
+    telegram_mode: str = Field(default="headless")
 
-    # Webhook server (FastAPI) settings
     webhook_host: str = Field(default="0.0.0.0")
     webhook_port: int = Field(default=8000)
-    # Maximum allowed runtime per account (seconds) for live workflows. If exceeded, the workflow will abort and save debug artifacts.
-    max_run_seconds: int = Field(default=300)
+    max_run_seconds: int = Field(default=120)  # Réduit pour éviter les exécutions longues
 
     # -- Selectors --
-    # Login Page
     selector_login_username_input: str = Field(
         default='input[placeholder="Please enter your email"]',
     )
     selector_login_password_input: str = Field(
-        default='input[placeholder="Please enter password"]',
+        default='input[type="password"]',
     )
     selector_login_submit_button: str = Field(
         default='button:has-text("LOG IN")',
     )
     selector_login_error_message: str = Field(
-        default='#app > div.v-application--wrap > div.header-page > div.mobile-page > div',
+        default='div.wrong-msg',  # Sélecteur plus fiable
     )
 
-    # Main Navigation
     selector_nav_delivery_link: str = Field(
         default='span:has-text("Delivery")',
     )
 
-    # Delivery Page
     selector_delivery_invited_me_tab: str = Field(
         default='div.tab:has-text("Invited Me")',
     )
     selector_delivery_order_input: str = Field(
-        default='input[placeholder*="order"]',
+        default='input[placeholder^="Please enter the order"]',  # Sélecteur plus flexible
     )
     selector_delivery_recognize_button: str = Field(
         default='button:has-text("RECOGNIZE")',
@@ -101,7 +92,7 @@ class AppConfig(BaseSettings):
     )
 
     selector_info_div: str = Field(
-        default='#app > div > div.header-page > div.pc-page > div',
+        default='div.info-div',  # Sélecteur plus spécifique
     )
 
 

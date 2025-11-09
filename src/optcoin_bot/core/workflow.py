@@ -69,17 +69,8 @@ class OptcoinWorkflow:
             pass
 
         end_time = datetime.utcnow()
-        elapsed = (end_time - start_time).total_seconds()
-
-        if app_config.enforce_min_run_per_account:
-            remaining = max(0.0, float(app_config.min_run_seconds) - float(elapsed))
-            if remaining > 0:
-                await asyncio.sleep(remaining)
-                end_time = datetime.utcnow()
-                elapsed = (end_time - start_time).total_seconds()
-
         report["end_time_utc"] = end_time.isoformat()
-        report["duration_seconds"] = elapsed
+        report["duration_seconds"] = (end_time - start_time).total_seconds()
 
         return report
 
@@ -188,93 +179,78 @@ class OptcoinWorkflow:
             pass
         return None
 
-    @async_retry(max_attempts=3)
+    @async_retry(max_attempts=2, delay=1)
     async def _step_login(self, page: Page, dry_run: bool) -> Dict[str, Any]:
-        self.logger.info("Exécution de l'étape : Connexion standard")
+        self.logger.info("Exécution de l'étape : Connexion")
         if dry_run:
             return {"step": "login", "success": True, "simulated": True}
 
-        try:
-            if self.storage_state_path and Path(self.storage_state_path).exists():
-                self.logger.info("Fichier de session existant trouvé. Validation de la session.")
-                await page.goto(f"{app_config.optcoin_base_url}#/delivery", timeout=app_config.default_timeout)
-                try:
-                    await page.wait_for_url(lambda url: "/login" in url, timeout=5000)
-                    self.logger.warning("Session expirée. Redirigé vers la page de connexion. Ré-authentification.")
-                    try:
-                        Path(self.storage_state_path).unlink()
-                        self.logger.info(f"Fichier de session expiré supprimé : {self.storage_state_path}")
-                    except Exception as e:
-                        self.logger.error(f"Échec de la suppression du fichier de session : {e}")
-                except PlaywrightTimeoutError:
-                    try:
-                        await page.locator(app_config.selector_delivery_invited_me_tab).first.wait_for(state="visible", timeout=1000)
-                        self.logger.info("La session est toujours valide.")
-                        return {"step": "login", "success": True, "cached": True}
-                    except PlaywrightTimeoutError:
-                        self.logger.warning("Session expirée. Élément non trouvé sur la page de livraison. Ré-authentification.")
-                        try:
-                            Path(self.storage_state_path).unlink()
-                            self.logger.info(f"Fichier de session expiré supprimé : {self.storage_state_path}")
-                        except Exception as e:
-                            self.logger.error(f"Échec de la suppression du fichier de session : {e}")
+        # Prioritize using the session file to bypass CAPTCHA
+        if self.storage_state_path and Path(self.storage_state_path).exists():
+            self.logger.info("Session existante trouvée. Validation.")
+            await page.goto(f"{app_config.optcoin_base_url}#/delivery", timeout=app_config.default_timeout)
+            if "/login" not in page.url.lower():
+                self.logger.info("Session valide. Connexion via la session réussie.")
+                return {"step": "login", "success": True, "cached": True}
+            self.logger.warning("Session expirée ou invalide. Tentative de reconnexion manuelle.")
 
-            self.logger.info(f"Navigation directe vers la page de connexion : {app_config.optcoin_login_url}")
+        # If no valid session, guide user toward manual login to solve CAPTCHA
+        self.logger.warning(
+            "Aucun fichier de session valide trouvé. Le bot va tenter de se connecter, "
+            "mais il est probable qu'un CAPTCHA bloque le processus."
+        )
+        self.logger.warning(
+            "Pour de meilleurs résultats, veuillez exécuter le bot en mode visible (`--mode visible`), "
+            "résoudre le CAPTCHA manuellement une fois pour créer le fichier de session, "
+            "puis exécuter en mode invisible pour les fois suivantes."
+        )
+
+        try:
             await page.goto(app_config.optcoin_login_url, timeout=app_config.default_timeout)
-            await page.locator(app_config.selector_login_username_input).wait_for(timeout=app_config.default_timeout)
-            self.logger.info("Le formulaire de connexion est visible.")
             await page.locator(app_config.selector_login_username_input).fill(self.username)
             await page.locator(app_config.selector_login_password_input).fill(self.password.get_secret_value())
-            await page.locator(app_config.selector_login_submit_button).click()
-            await page.wait_for_url(lambda url: "/login" not in url.lower(), timeout=app_config.default_timeout)
+
+            # Wait for user to solve CAPTCHA if in visible mode
+            self.logger.info("En attente de la résolution manuelle du CAPTCHA et de la redirection...")
+            await page.wait_for_url(lambda url: "/login" not in url.lower(), timeout=120000) # 2 minutes timeout for manual solving
+
             if self.browser_context and self.storage_state_path:
                 await self.browser_context.storage_state(path=self.storage_state_path)
-                self.logger.info(f"État de la session sauvegardé dans {self.storage_state_path}")
+                self.logger.info(f"Nouvel état de session sauvegardé : {self.storage_state_path}")
+
             self.logger.info("Connexion réussie.")
             return {"step": "login", "success": True}
         except Exception as e:
-            error_msg = f"Échec de la connexion : {e}"
+            error_msg = (
+                f"La connexion a échoué, probablement à cause d'un CAPTCHA non résolu. "
+                f"Veuillez réessayer en mode visible pour vous connecter manuellement. Erreur originale : {e}"
+            )
             self.logger.error(error_msg)
             return {"step": "login", "success": False, "error": error_msg}
 
-    @async_retry(max_attempts=3)
+    @async_retry(max_attempts=2, delay=1)
     async def _step_navigate_to_delivery(self, page: Page, dry_run: bool) -> Dict[str, Any]:
-        self.logger.info("Exécution de l'étape : Navigation vers la livraison")
+        self.logger.info("Navigation vers la page de livraison")
         if dry_run:
             return {"step": "navigate_to_delivery", "success": True, "simulated": True}
         try:
-            delivery_url = f"{app_config.optcoin_base_url}#/delivery"
-            await page.goto(delivery_url, timeout=app_config.default_timeout, wait_until="domcontentloaded")
+            await page.goto(f"{app_config.optcoin_base_url}#/delivery", timeout=app_config.default_timeout)
             await page.locator(app_config.selector_delivery_invited_me_tab).first.wait_for(state="visible", timeout=app_config.default_timeout)
-            self.logger.info("Navigation vers la page de livraison réussie.")
             return {"step": "navigate_to_delivery", "success": True}
-        except PlaywrightTimeoutError as e:
-            error_msg = f"Délai d'attente dépassé lors de la navigation vers la page de livraison : {e}"
-            self.logger.error(f"{error_msg} URL actuelle : {page.url}")
-            return {"step": "navigate_to_delivery", "success": False, "error": error_msg}
         except Exception as e:
-            error_msg = f"Erreur inattendue lors de la navigation vers la page de livraison : {e}"
-            self.logger.error(f"{error_msg} URL actuelle : {page.url}", exc_info=True)
-            return {"step": "navigate_to_delivery", "success": False, "error": error_msg}
+            return {"step": "navigate_to_delivery", "success": False, "error": f"Échec de la navigation : {e}"}
 
-    @async_retry(max_attempts=3)
+    @async_retry(max_attempts=2, delay=1)
     async def _step_click_invited_me(self, page: Page, dry_run: bool) -> Dict[str, Any]:
-        self.logger.info("Exécution de l'étape : Clic sur l'onglet 'Invited Me'")
+        self.logger.info("Clic sur l'onglet 'Invited Me'")
         if dry_run:
             return {"step": "click_invited_me", "success": True, "simulated": True}
         try:
             await page.locator(app_config.selector_delivery_invited_me_tab).first.click(timeout=app_config.default_timeout)
-            await page.wait_for_timeout(1000)
-            self.logger.info("Clic sur l'onglet 'Invited Me' réussi.")
+            await page.wait_for_timeout(500)  # Attente courte pour la stabilité de l'interface
             return {"step": "click_invited_me", "success": True}
-        except PlaywrightTimeoutError as e:
-            error_msg = f"Délai d'attente dépassé en cliquant sur l'onglet 'Invited Me' : {e}"
-            self.logger.error(f"{error_msg} URL actuelle : {page.url}")
-            return {"step": "click_invited_me", "success": False, "error": error_msg}
         except Exception as e:
-            error_msg = f"Erreur inattendue en cliquant sur l'onglet 'Invited Me' : {e}"
-            self.logger.error(f"{error_msg} URL actuelle : {page.url}", exc_info=True)
-            return {"step": "click_invited_me", "success": False, "error": error_msg}
+            return {"step": "click_invited_me", "success": False, "error": f"Échec du clic : {e}"}
 
     @async_retry(max_attempts=3)
     async def _step_enter_order_and_recognize(self, page: Page, order_number: str, dry_run: bool) -> Dict[str, Any]:
@@ -330,7 +306,7 @@ class OptcoinWorkflow:
                 if "already followed the order" in msg_lower or ("already" in msg_lower and any(term in msg_lower for term in ["follow", "followed", "follow this", "已跟", "跟单", "已关注", "已跟随", "跟随"])):
                     self.logger.info(f"Confirmation a retourné un message informatif traité comme un succès : {confirm_alert}")
                     return {"step": "confirm_order", "success": True, "alert_message": confirm_alert}
-                
+
                 error_message = f"La confirmation a retourné une alerte : {confirm_alert}"
                 if "Invalid parameter" in confirm_alert:
                     error_message = "Paramètre invalide détecté lors de la confirmation. Le numéro d'ordre est probablement expiré ou incorrect."
